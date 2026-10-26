@@ -1,7 +1,7 @@
 'use client';
 
 import React, {
-  createContext, useContext, useEffect, useId, useMemo, useState,
+  createContext, useContext, useEffect, useLayoutEffect, useId, useMemo, useState,
   useSyncExternalStore, type ReactNode,
 } from 'react';
 import { QueryClient, QueryClientProvider, useQuery, hashKey } from '@tanstack/react-query';
@@ -27,6 +27,13 @@ export type UI<C extends AnyCapability, Props = {}> = {
   readonly commands: CapabilityCommands<C>;
   readonly props: Props;
 };
+
+/** Per-boundary response ordering, not a database/entity version. */
+export interface DomainSnapshot { state: unknown; revision: number }
+const useCommitEffect = typeof window === 'undefined' ? useEffect : useLayoutEffect;
+function checkRevision(revision: number) {
+  if (!Number.isSafeInteger(revision) || revision < 0) throw new Error('Snapshot revision must be a non-negative safe integer.');
+}
 
 type Scope = { name: string; key: string | number; keyField: string };
 type CommandState = { pending: number; error: Error | null };
@@ -71,17 +78,34 @@ class Runtime {
   private listeners = new Map<string, Set<() => void>>();
   private executors = new Map<string, (input: unknown) => Promise<CommandResult>>();
   active = true;
+  refresh: (() => Promise<DomainSnapshot>) | undefined;
+  private revision: number;
   constructor(
     readonly domain: BoundDomain,
     readonly input: unknown,
     readonly services: unknown,
     readonly client: QueryClient,
     instanceId: string,
+    readonly initialState: unknown,
+    initialRevision: number | undefined,
   ) {
+    if (initialRevision !== undefined) checkRevision(initialRevision);
+    this.revision = initialState === undefined ? -1 : (initialRevision ?? 0);
     this.queryKey = ['mortise', domain.id, instanceId, ++runtimeSequence, input];
+  }
+  applySnapshot(snapshot: DomainSnapshot): boolean {
+    checkRevision(snapshot.revision);
+    if (snapshot.state === undefined) throw new Error('A refreshed domain snapshot must contain state.');
+    if (!this.active || snapshot.revision <= this.revision) return false;
+    // Cancellation occurs before publication; old fetch results cannot replace this snapshot.
+    void this.client.cancelQueries({ queryKey: this.queryKey, exact: true });
+    this.client.setQueryData(this.queryKey, snapshot.state);
+    this.revision = snapshot.revision;
+    return true;
   }
   options = () => ({
     queryKey: this.queryKey,
+    initialData: this.initialState,
     queryFn: async ({ signal }: { signal: AbortSignal }) => {
       const input = this.domain.query.input ? this.domain.query.input.parse(this.input) : this.input;
       const context = { root: undefined, services: this.services, input, signal };
@@ -144,7 +168,17 @@ class Runtime {
           phase = 'refresh';
           if (this.active) {
             await this.client.cancelQueries({ queryKey: this.queryKey, exact: true });
-            await this.client.fetchQuery({ ...this.options(), staleTime: 0 });
+            if (this.refresh) {
+              const previousRevision = this.revision;
+              const snapshot = await this.refresh();
+              checkRevision(snapshot.revision);
+              if (snapshot.revision <= previousRevision && this.revision <= previousRevision) {
+                throw new Error('Refresh did not provide a newer snapshot revision.');
+              }
+              this.applySnapshot(snapshot);
+            } else {
+              await this.client.fetchQuery({ ...this.options(), staleTime: 0 });
+            }
           }
           this.update(key, { pending: this.snapshot(key).pending - 1, error: null });
           return { ok: true, status: 'success', committed: true, data };
@@ -174,6 +208,12 @@ export interface DomainProviderProps {
   fallback?: ReactNode;
   errorFallback?: ReactNode | ((error: Error) => ReactNode);
   queryClient?: QueryClient;
+  /** Server snapshot used for first render/hydration without a browser query. */
+  initialState?: unknown;
+  /** A larger revision publishes a later external snapshot without remounting UI. */
+  revision?: number;
+  /** Experimental RSC bridge: refresh the tree and return its authoritative snapshot. */
+  onRefresh?: () => Promise<DomainSnapshot>;
 }
 export function DomainProvider({ queryClient, ...props }: DomainProviderProps) {
   const [ownClient] = useState(() => new QueryClient());
@@ -181,10 +221,14 @@ export function DomainProvider({ queryClient, ...props }: DomainProviderProps) {
     <DomainBoundary {...props} client={queryClient ?? ownClient} />
   </QueryClientProvider>;
 }
-function DomainBoundary({ domain, input, services = noServices, client, children, fallback = null, errorFallback }: Omit<DomainProviderProps, 'queryClient'> & { client: QueryClient }) {
+function DomainBoundary({ domain, input, services = noServices, client, children, fallback = null, errorFallback, initialState, revision, onRefresh }: Omit<DomainProviderProps, 'queryClient'> & { client: QueryClient }) {
   const id = useId();
   const inputHash = hashKey([input]);
-  const runtime = useMemo(() => new Runtime(domain, input, services, client, id), [domain, inputHash, services, client, id]);
+  const runtime = useMemo(() => new Runtime(domain, input, services, client, id, initialState, revision), [domain, inputHash, services, client, id]);
+  useCommitEffect(() => {
+    runtime.refresh = onRefresh;
+    if (revision !== undefined && initialState !== undefined) runtime.applySnapshot({ state: initialState, revision });
+  }, [runtime, onRefresh, initialState, revision]);
   useEffect(() => {
     runtime.active = true;
     return () => {

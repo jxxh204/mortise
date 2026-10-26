@@ -1,10 +1,10 @@
-# v0.2의 지원 범위와 제약
+# v0.3의 지원 범위와 제약
 
-Mortise v0.2는 React의 계약 기반 UI 연결에 HTTP Query·Action 실행을 추가한 프로토타입이다. 이전 설계 대화에서 논의한 원격 RSC 배포까지 구현한 버전은 아니다.
+Mortise v0.3은 계약 기반 UI·HTTP Query·Action에 실험적 RSC 예제를 추가한다. 실제 Flight 스트림, SSR HTML, hydration을 사용하지만 범용 RSC 프레임워크나 독립 도메인 배포 시스템을 완성한 버전은 아니다.
 
 ## 서버 실행과 보안 경계
 
-- RSC, Flight 스트림 생성·조합, SSR, hydration을 제공하지 않는다. `ui/server`를 사용하는 입력은 지원하는 것처럼 처리하지 않고 오류로 보고해야 한다.
+- RSC는 `mortise({ rsc: true })`와 공식 Vite RSC 플러그인을 함께 쓰는 별도 예제에서 지원한다. 일반 HTTP·Client 모드에서 `ui/server`를 사용하면 오류다. RSC 모드에서도 서버 UI는 실제 `rsc` 환경에서만 실행한다.
 - HTTP 모드에서 Query·Action 구현은 서버에서 실행한다. 로컬 `attachDomain` 방식도 있으므로 파일 이름만으로 원격 실행을 보장하지 않는다.
 - UI wrapper는 UI 연결을 담당한다. 서버 경계는 HTTP 전송 설정과 서버 핸들러에서 구현한다.
 - 예제 데이터는 서버 프로세스 메모리에 저장된다. 브라우저 새로고침과 서버 재시작은 다르다. 서버 재시작이나 개발 중 서버 모듈 재로딩 시 데이터가 초기화될 수 있으며 DB 영속성은 없다.
@@ -21,6 +21,26 @@ Mortise v0.2는 React의 계약 기반 UI 연결에 HTTP Query·Action 실행을
 Origin이 없는 CLI·서버 요청은 허용할 수 있다. Origin 검사는 인증을 대신하지 않으며 CORS 허용 헤더를 추가해 임의의 다른 사이트를 자동 지원하는 서버도 아니다. 실제 로그인, CSRF 정책, 세션·토큰 검증은 애플리케이션 배포 환경에 맞게 구성해야 한다.
 
 의도적으로 공개한 `MortiseHttpError`의 상태·코드·메시지만 클라이언트에 전달하고, 예상하지 못한 오류는 일반 오류로 변환한다. 공개 오류 메시지에 비밀 정보를 넣지 않는다.
+
+RSC 예제도 익명 데모다. RSC 진입점은 내부 Query 요청을 생성하지만 원래 HTTP 요청의 사용자 세션을 자동 전달하는 일반 인증 계층은 아니다. 실제 인증을 연결할 때는 원래 요청의 신뢰할 수 있는 사용자 컨텍스트와 Query·Action 권한 검사를 이어야 한다.
+
+## 실험적 RSC의 범위
+
+- `@mortise/rsc/server`는 Node의 AsyncLocalStorage를 사용한다. Edge·브라우저에서 실행하는 서버 scope 구현은 제공하지 않는다.
+- `runWithDomain`은 실제 Flight 렌더링 시작을 감싸야 한다. JSX 객체만 만든 뒤 scope 밖에서 렌더링하면 같은 문맥을 가정할 수 없다.
+- `readDomain<T>`와 `readDomainInput<T>`의 타입 인자는 호출자가 지정하는 TypeScript 타입이다. 외부 데이터의 스키마 검사를 대신하지 않는다. 읽기 전용 타입도 깊은 객체 불변성을 런타임에서 강제하지 않는다.
+- `RscPayload`는 `{ root, snapshot }` 하나를 다룬다. 여러 독립 도메인 스냅샷, 중첩 서버 도메인, 도메인별 병렬 Flight 갱신은 아직 일반화하지 않았다.
+- React RSC, SSR, 브라우저 환경의 버전과 에셋 참조를 함께 검증해야 한다. 현재 조합은 React/React DOM/react-server-dom-webpack 19.3.1, 공식 Vite RSC 플러그인 0.5.38, Vite 7이다.
+- 현재 명령 실행은 Mortise의 HTTP JSON RPC다. React의 `'use server'` 함수 디스패치 전체를 구현했다고 주장하지 않는다.
+- 예제의 `/`와 `/index.rsc` 처리는 명시적으로 작성되어 있다. 폴더에서 모든 라우트·권한·서버 boundary를 자동 구성하는 기능은 아직 아니다.
+
+### 렌더링 일관성
+
+초기 HTML과 Client는 같은 스냅샷을 사용한다. `initialState`가 있으면 초기 중복 Query를 생략한다. 후속 스냅샷은 더 큰 revision만 적용하고, Action 성공 후 RSC refresh가 완료될 때까지 pending을 유지한다.
+
+그러나 RSC 트리는 React transition으로 갱신하고 Client 상태는 외부 Query 캐시에 반영하므로, 두 경로가 항상 하나의 원자적 commit으로 표시된다고 보장하지 않는다. 순간적인 이전 서버 화면과 새 Client 상태의 조합을 완전히 제거하는 기능은 후속 과제다.
+
+revision은 현재 Client root의 응답 순서다. DB 버전, 서버 전역 순서, 여러 사용자 사이의 충돌 방지 장치가 아니다. 다른 클라이언트의 변경을 자동으로 실시간 반영하지 않는다.
 
 ## 계약이 보장하는 것
 
@@ -83,7 +103,7 @@ UI 주입 변환은 `export default function`의 단일 매개변수에 붙인 `
 ## 아직 제공하지 않는 배포 기능
 
 - 도메인별 서버 배포와 배포 레지스트리
-- 원격 RSC와 Client 에셋 manifest의 버전 연결
+- 독립 배포된 도메인 서버 사이의 RSC 조립과 Client 에셋 버전 협상
 - 여러 서버에 걸친 배포 라우팅과 인증 시스템의 자동 구성
 - 여러 탭·사용자·서버 사이의 실시간 상태 동기화
 - 영속 저장, 분산 트랜잭션, 서버 전체에서의 명령 실행 순서 보장

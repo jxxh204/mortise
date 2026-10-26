@@ -5,7 +5,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import ts from "typescript";
 import { build } from "vite";
-import { createDomainModule, discoverDomains, discoverUI, generateTypes, mortise, transformUI } from "./index";
+import { createDomainModule, discoverDomains, discoverUI, generateTypes, mortise, transformUI, withClientDirective } from "./index";
 
 const temporary: string[] = [];
 afterEach(() => temporary.splice(0).forEach((directory) => fs.rmSync(directory, { recursive: true, force: true })));
@@ -154,5 +154,64 @@ describe("HTTP server boundary", () => {
     const entry = path.join(root, "entry.ts");
     fs.writeFileSync(entry, 'import action from "./helper"; console.log(action);');
     await expect(bundle(root, entry)).rejects.toThrow("Server-only domain module");
+  });
+});
+
+describe("RSC folder boundaries", () => {
+  function configured(root: string, rsc = true) {
+    const plugin = mortise({ rsc });
+    // Exercise environment-dependent hooks directly; official RSC execution is integration-tested by the app.
+    (plugin.configResolved as Function)({ root });
+    const transform = (source: string, file: string, environment: string) =>
+      (plugin.transform as Function).call({ environment: { name: environment } }, source, file, { ssr: environment !== "client" });
+    return { plugin, transform };
+  }
+
+  it("adds a client boundary to ordinary folder components, not only injected UI", () => {
+    const { root, cart, write } = fixture();
+    const source = "export default function Button() { return <button>Click</button>; }";
+    write("ui/client/Button.tsx", source);
+    const { transform } = configured(root);
+    for (const environment of ["client", "ssr", "rsc"]) {
+      expect(transform(source, path.join(cart, "ui/client/Button.tsx"), environment).code).toBe(`"use client";\n${source}`);
+    }
+  });
+
+  it("adds the directive before an injected hook wrapper and preserves existing directives", () => {
+    const { root, cart, write } = fixture();
+    write("ui/client/Quantity.tsx", ui);
+    const result = configured(root).transform(ui, path.join(cart, "ui/client/Quantity.tsx"), "rsc");
+    expect(result.code.startsWith('"use client";')).toBe(true);
+    expect(result.code).toContain("__mortiseUseCapability(QuantityEditable)");
+    const marked = '"use client";\nexport default function Button() { return null; }';
+    expect(withClientDirective(marked, "Button.tsx")).toBe(marked);
+    expect(() => withClientDirective('"use server";\nexport async function action() {}', "Button.tsx")).toThrow("cannot declare 'use server'");
+  });
+
+  it("allows server UI only in the named rsc environment with rsc enabled", () => {
+    const { root, cart, write } = fixture();
+    const source = "export default async function Cart() { return <h1>Cart</h1>; }";
+    write("ui/server/Cart.tsx", source);
+    const file = path.join(cart, "ui/server/Cart.tsx");
+    const { transform } = configured(root);
+    expect(transform(source, file, "rsc")).toBeNull();
+    expect(() => transform(source, file, "ssr")).toThrow("only execute in the 'rsc' environment");
+    expect(() => transform(source, file, "client")).toThrow("Server-only domain module");
+    expect(() => configured(root, false).transform(source, file, "rsc")).toThrow("not implemented");
+  });
+
+  it("keeps public domains remote in every environment and server registry private", () => {
+    const { root, write } = fixture();
+    write("actions/setQuantity.ts", 'export default { secret: "SERVER_ONLY_SENTINEL" };');
+    const { plugin } = configured(root);
+    for (const environment of ["client", "ssr", "rsc"]) {
+      const context = { environment: { name: environment } };
+      const code = (plugin.load as Function).call(context, "\0mortise:domains", { ssr: environment !== "client" });
+      expect(code).toContain("createRemoteDomain");
+      expect(code).not.toContain("actions/");
+      expect(code).not.toContain("queries/");
+    }
+    expect(() => (plugin.resolveId as Function).call({ environment: { name: "client" } }, "mortise:server-domains", undefined, { ssr: true })).toThrow("SSR-only");
+    expect((plugin.resolveId as Function).call({ environment: { name: "rsc" } }, "mortise:server-domains", undefined, { ssr: false })).toBe("\0mortise:server-domains");
   });
 });

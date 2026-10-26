@@ -1,7 +1,7 @@
 {
   "name": "mortise-workspace",
   "private": true,
-  "version": "0.2.0",
+  "version": "0.3.0",
   "type": "module",
   "workspaces": [
     "packages/*",
@@ -9,27 +9,33 @@
   ],
   "scripts": {
     "dev": "vite --config examples/playground/vite.config.ts",
-    "generate": "tsc -p packages/vite-plugin/tsconfig.build.json && node packages/vite-plugin/dist/cli.js examples/playground",
+    "generate": "tsc -p packages/vite-plugin/tsconfig.build.json && node packages/vite-plugin/dist/cli.js examples/playground && node packages/vite-plugin/dist/cli.js examples/rsc",
     "build": "pnpm run build:packages && vite build --config examples/playground/vite.config.ts && vite build --config examples/playground/vite.config.ts --ssr src/start.ts --outDir dist-server",
-    "build:packages": "tsc -p packages/core/tsconfig.build.json && tsc -p packages/react/tsconfig.build.json && tsc -p packages/vite-plugin/tsconfig.build.json && tsc -p packages/server/tsconfig.build.json",
+    "build:packages": "tsc -p packages/core/tsconfig.build.json && tsc -p packages/react/tsconfig.build.json && tsc -p packages/vite-plugin/tsconfig.build.json && tsc -p packages/server/tsconfig.build.json && tsc -p packages/rsc/tsconfig.build.json",
     "test": "vitest run",
     "typecheck": "pnpm generate && tsc --noEmit",
-    "start": "node examples/playground/dist-server/start.js"
+    "start": "node examples/playground/dist-server/start.js",
+    "dev:rsc": "vite --config examples/rsc/vite.config.ts",
+    "build:rsc": "vite build --app --config examples/rsc/vite.config.ts",
+    "start:rsc": "vite preview --config examples/rsc/vite.config.ts --host 127.0.0.1 --port 8773"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "typescript": "^5.7.0",
-    "vite": "^6.0.0",
+    "vite": "^7.0.0",
     "vitest": "^3.0.0",
     "jsdom": "^26.0.0",
-    "@testing-library/react": "^16.0.0"
+    "@testing-library/react": "^16.0.0",
+    "@vitejs/plugin-rsc": "0.5.38"
   },
   "dependencies": {
-    "react": "^19.0.0",
-    "react-dom": "^19.0.0",
-    "@tanstack/react-query": "^5.66.0"
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
+    "@tanstack/react-query": "^5.66.0",
+    "react-server-dom-webpack": "19.3.1",
+    "rsc-html-stream": "^0.0.7"
   },
   "packageManager": "pnpm@11.25.0",
   "engines": {

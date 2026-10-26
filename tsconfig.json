@@ -9,7 +9,9 @@
     "skipLibCheck": true,
     "types": [
       "node",
-      "vitest/globals"
+      "vitest/globals",
+      "@vitejs/plugin-rsc/types",
+      "vite/client"
     ],
     "lib": [
       "ES2022",
@@ -32,6 +34,12 @@
       ],
       "@mortise/server/node": [
         "packages/server/src/node.ts"
+      ],
+      "@mortise/rsc/server": [
+        "packages/rsc/src/server.ts"
+      ],
+      "@mortise/rsc/client": [
+        "packages/rsc/src/client.tsx"
       ]
     }
   },
@@ -39,6 +47,7 @@
     "packages",
     "examples",
     "vitest.config.ts",
-    "examples/playground/.mortise/**/*.d.ts"
+    "examples/playground/.mortise/**/*.d.ts",
+    "examples/rsc/.mortise/**/*.d.ts"
   ]
 }

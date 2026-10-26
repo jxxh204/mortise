@@ -20,6 +20,8 @@ export interface MortiseOptions {
   serverEntry?: string;
   /** Trusted development origin; defaults to Vite's configured/resolved local URL. */
   publicOrigin?: string;
+  /** Enable server UI only in the official plugin's named `rsc` environment. */
+  rsc?: boolean;
 }
 
 export interface DiscoveredDomain {
@@ -211,11 +213,29 @@ export function transformUI(source: string, filename: string): string | null {
   return `${printer.printFile(rewritten)}\nimport { useCapability as ${hookName} } from "@mortise/react";\nexport default function ${wrapperName}(props: ${propsType}) {\n  const binding = ${hookName}(${contract});\n  return <${viewName} state={binding.state} commands={binding.commands} props={props} />;\n}\n`;
 }
 
+/** Folder conventions become directives before the official RSC plugin runs. */
+export function withClientDirective(source: string, filename: string): string {
+  const ast = ts.createSourceFile(filename, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  let client = false;
+  for (const statement of ast.statements) {
+    if (!ts.isExpressionStatement(statement) || !ts.isStringLiteral(statement.expression)) break;
+    if (statement.expression.text === "use server") throw new Error(`[Mortise] ui/client modules cannot declare 'use server': ${filename}`);
+    if (statement.expression.text === "use client") client = true;
+  }
+  return client ? source : `"use client";\n${source}`;
+}
+
+function serverEnvironment(context: { environment?: { name: string } }, legacySSR?: boolean): boolean {
+  // A named client environment always wins over a stale/incorrect SSR option.
+  if (context.environment?.name) return ["ssr", "rsc"].includes(context.environment.name);
+  return legacySSR === true;
+}
+
 export function mortise(options: MortiseOptions = {}): Plugin {
   let config: ResolvedConfig;
   let domainsDirectory: string;
   let serverEntry: string;
-  const transport = options.transport ?? "local";
+  const transport = options.rsc ? "http" : options.transport ?? "local";
   const endpoint = (options.endpoint ?? "/_mortise").replace(/\/$/, "");
   if (!endpoint.startsWith("/") || endpoint.startsWith("//") || endpoint.includes("?") || endpoint.includes("#") || endpoint === "") {
     throw new Error("[Mortise] endpoint must be a same-origin path such as '/_mortise'.");
@@ -251,9 +271,10 @@ export function mortise(options: MortiseOptions = {}): Plugin {
       }
     },
     resolveId(id, _importer, resolveOptions) {
+      if (id === "@mortise/rsc/server" && !resolveOptions?.ssr) throw new Error("[Mortise] @mortise/rsc/server is server-only.");
       if (id === VIRTUAL_DOMAINS) return RESOLVED_DOMAINS;
       if (id === VIRTUAL_SERVER_DOMAINS || id === RESOLVED_SERVER_DOMAINS) {
-        if (!resolveOptions?.ssr) throw new Error("[Mortise] mortise:server-domains is SSR-only and cannot be imported into a client bundle.");
+        if (!serverEnvironment(this, resolveOptions?.ssr)) throw new Error("[Mortise] mortise:server-domains is SSR-only and cannot be imported into a client bundle.");
         return RESOLVED_SERVER_DOMAINS;
       }
       if (id.startsWith(VIRTUAL_UI)) {
@@ -264,7 +285,7 @@ export function mortise(options: MortiseOptions = {}): Plugin {
     load(id, loadOptions) {
       if (id === RESOLVED_DOMAINS) return createDomainModule(discoverDomains(domainsDirectory), { transport, endpoint });
       if (id === RESOLVED_SERVER_DOMAINS) {
-        if (!loadOptions?.ssr) throw new Error("[Mortise] mortise:server-domains is SSR-only.");
+        if (!serverEnvironment(this, loadOptions?.ssr)) throw new Error("[Mortise] mortise:server-domains is SSR-only.");
         return createDomainModule(discoverDomains(domainsDirectory));
       }
       if (id.startsWith(`\0${VIRTUAL_UI}`)) {
@@ -275,11 +296,13 @@ export function mortise(options: MortiseOptions = {}): Plugin {
     },
     transform(code, id, transformOptions) {
       const filename = id.split("?")[0];
-      if (filename && !filename.startsWith("\0") && !transformOptions?.ssr) assertClientBoundary(filename);
+      if (filename && !filename.startsWith("\0") && !serverEnvironment(this, transformOptions?.ssr)) assertClientBoundary(filename);
       if (!filename?.endsWith(".tsx") || filename.includes("node_modules")) return null;
       const relative = path.relative(domainsDirectory, canonical(filename));
       if (relative.startsWith("..") || path.isAbsolute(relative)) return null;
       if (slash(filename).includes("/ui/server/") || filename.includes(".server.")) {
+        if (options.rsc && this.environment?.name === "rsc") return null;
+        if (options.rsc) throw new Error(`[Mortise] Server UI may only execute in the 'rsc' environment, not '${this.environment?.name ?? "unknown"}': ${filename}`);
         throw new Error(`[Mortise] RSC rendering is not implemented. Server UI cannot be imported: ${filename}`);
       }
       if (!slash(filename).includes("/ui/client/")) {
@@ -287,10 +310,11 @@ export function mortise(options: MortiseOptions = {}): Plugin {
         return null;
       }
       const transformed = transformUI(code, filename);
+      if (options.rsc) return { code: withClientDirective(transformed ?? code, filename), map: null };
       return transformed === null ? null : { code: transformed, map: null };
     },
     configureServer(server) {
-      if (transport === "http") {
+      if (transport === "http" && !options.rsc) {
         server.middlewares.use(async (request, response, next) => {
           const pathname = request.url?.split("?")[0] ?? "";
           if (pathname !== endpoint && !pathname.startsWith(`${endpoint}/`)) return next();

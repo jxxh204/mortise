@@ -2,7 +2,9 @@
 
 React UI가 요구하는 계약을 선언하면 도메인의 상태와 Action을 연결하는 프레임워크 프로토타입이다. 같은 이름은 자동으로 연결하고, 다른 이름만 `domain.ts`에 적는다.
 
-v0.2는 **계약 기반 UI 연결과 실제 HTTP Query·Action 실행**을 제공한다. UI는 브라우저에서 React로 렌더링하고, Query·Action은 Node 서버에서 실행한다. RSC, 인증된 사용자 시스템, 원격 컴포넌트 배포는 아직 지원하지 않는다. 예제 데이터는 서버 프로세스 메모리에 저장된다. 자세한 범위는 [제약 문서](docs/limitations.md)를 참고한다.
+v0.3은 **실제 React Server Components를 사용하는 실험적 예제**를 추가한다. 공식 Vite RSC 플러그인이 Flight 스트림을 만들고, SSR HTML과 hydration을 연결한다. 계약 기반 Client UI와 HTTP Action 실행도 함께 동작한다.
+
+기존 `examples/playground`는 v0.2의 HTTP·Client 렌더링 예제이고, `examples/rsc`는 단일 장바구니 도메인 경계의 RSC 실험이다. 인증된 사용자 시스템, 영속 DB, 도메인별 원격 배포, 임의의 여러 RSC 도메인 조합은 아직 제공하지 않는다. 예제 데이터는 서버 프로세스 메모리에 저장된다. 자세한 범위는 [제약 문서](docs/limitations.md)를 참고한다.
 
 ## 실행
 
@@ -33,6 +35,16 @@ pnpm start
 ```
 
 기본 프로덕션 주소는 `http://127.0.0.1:8771`이다. 외부 주소를 변경할 때는 `MORTISE_ORIGIN`을 설정한다. 이 값은 서버의 허용 origin과 예제의 listen 주소에도 사용되므로 배포 환경에 맞게 지정한다.
+
+실험적 RSC 예제는 별도 명령으로 실행한다.
+
+```sh
+pnpm dev:rsc
+pnpm build:rsc
+pnpm start:rsc
+```
+
+개발 주소는 `http://127.0.0.1:8772`다. `build:rsc` 이후 `start:rsc`는 빌드 결과를 `http://127.0.0.1:8773`에서 Vite preview로 확인한다. 이 preview 명령을 운영용 서버 배포 어댑터로 간주하지 않는다. `/`는 HTML, `/index.rsc`는 `text/x-component` Flight 응답이다. RSC 예제는 React와 `react-server-dom-webpack` **19.3.1**, `@vitejs/plugin-rsc` **0.5.38**, Vite **7** 조합을 사용한다. 일반 React 버전만 독립적으로 바꾸기보다 lockfile과 함께 이 조합을 검증한다.
 
 `pnpm generate`는 발견한 도메인과 UI의 공개 import 타입을 생성한다. UI 파일을 추가하거나 이름을 바꾼 뒤 타입 검사를 할 때 다시 실행한다.
 
@@ -291,10 +303,64 @@ Vite middleware는 개발 서버에서만 실행한다. 프로덕션에서는 �
 
 업무 규칙, 외부 API 구현, UI 배치, 실제 서버 인증·권한은 애플리케이션의 책임이다. 폴더와 계약 이름으로 이를 추측하지 않는다.
 
+## 실험적 RSC: 서버 조회와 Client UI 연결
+
+RSC 예제의 Vite 설정은 `mortise({ rsc: true, transport: "http" })`와 공식 `@vitejs/plugin-rsc`를 함께 사용한다. `ui/server`는 실제 `rsc` 환경에서만 실행하고, `ui/client`에는 Client 경계를 생성한다. 일반 HTTP 예제에서 서버 UI 파일을 사용하면 여전히 지원 오류다.
+
+서버 컴포넌트는 현재 요청의 도메인 스냅샷을 읽는다.
+
+```tsx
+// domains/cart/ui/server/Cart.tsx
+import { readDomain } from "@mortise/rsc/server";
+
+type CartState = { total: number };
+
+export default async function ServerSummary() {
+  await Promise.resolve();
+  const cart = readDomain<CartState>();
+  return <strong>합계: {cart.total.toLocaleString()}원</strong>;
+}
+```
+
+`readDomain<T>()`는 현재 요청 스냅샷을 읽는 API이며 `T`의 구조를 런타임 검증하는 스키마가 아니다. `readDomainInput<T>()`로 현재 도메인의 입력을 읽을 수도 있다. 서버 진입점은 `runWithDomain({ state, input, request }, () => renderToReadableStream(...))`으로 **실제 Flight 렌더링 시작**을 감싼다. JSX 객체 생성만 감싼 뒤 밖에서 렌더링하는 방식은 사용하지 않는다.
+
+Client bridge는 같은 스냅샷을 초기 상태로 받는다.
+
+```tsx
+import type { ReactNode } from "react";
+import { DomainProvider, type DomainSnapshot } from "@mortise/react";
+import { useRscRefresh } from "@mortise/rsc/client";
+import { cart } from "mortise:domains";
+
+export default function CartBridge({ snapshot, children }: {
+  snapshot: DomainSnapshot;
+  children: ReactNode;
+}) {
+  const refresh = useRscRefresh();
+  return (
+    <DomainProvider
+      domain={cart}
+      input={{ cartId: "cart-main" }}
+      initialState={snapshot.state}
+      revision={snapshot.revision}
+      onRefresh={refresh}
+    >
+      {children}
+    </DomainProvider>
+  );
+}
+```
+
+타입을 포함한 실행 가능한 코드는 [CartBridge](examples/rsc/src/domains/cart/ui/client/CartBridge.tsx)에 있다. 최초 Client 렌더는 서버와 동일한 상태를 사용하므로 별도의 초기 Query 요청이 필요하지 않다. Action 성공 후 `useRscRefresh`가 새 Flight payload를 요청하고, 새 서버 트리와 도메인 스냅샷을 전달한다.
+
+이 버전은 `RscPayload = { root, snapshot }`의 **단일 도메인 모델**이다. revision은 늦게 도착한 응답이 최신 스냅샷을 덮어쓰지 않도록 쓰는 응답 순서이며, DB 버전이 아니다. RSC 트리와 Client 외부 저장소가 하나의 원자적 React commit으로 갱신된다는 보장은 하지 않는다.
+
+RSC 프레임워크 진입점은 아직 예제에 명시적으로 작성한다. 폴더만 두면 라우팅·권한·다중 도메인 서버 조립까지 완성되는 단계는 아니다. [RSC 진입점](examples/rsc/src/entry.rsc.tsx), [SSR 진입점](examples/rsc/src/entry.ssr.tsx), [브라우저 진입점](examples/rsc/src/entry.browser.tsx)을 함께 참고한다.
+
 ## 설계와 한계
 
 - [아키텍처](docs/architecture.md): 계약, 소스 범위, 도메인 인스턴스, 항목 범위의 관계
-- [지원 범위와 제약](docs/limitations.md): RSC 미지원, 타입 검사 범위, 서버 메모리 데모와 인증·영속성의 차이
+- [지원 범위와 제약](docs/limitations.md): 실험적 RSC의 범위, 타입 검사 범위, 서버 메모리 데모와 인증·영속성의 차이
 
 이 저장소의 API는 초기 구현이며, 이전 대화에서 제안한 모든 API와 호환되는 확정 명세가 아니다. 실제 export와 예제 코드를 기준으로 사용한다.
 

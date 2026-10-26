@@ -1,6 +1,8 @@
 // @vitest-environment jsdom
 import React, { useState } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { renderToString } from 'react-dom/server';
+import { hydrateRoot } from 'react-dom/client';
 import { QueryClient } from '@tanstack/react-query';
 import { render, screen, fireEvent, waitFor, cleanup, act } from '@testing-library/react';
 import { attachDomain, defineDomain, defineCapability, provide, schema } from '@mortise/core';
@@ -151,4 +153,83 @@ describe('remote outcome propagation',()=>{
   await waitFor(()=>expect(result).toHaveBeenCalledWith(expect.objectContaining({status:'result-error',committed:true})));
   expect(f.action).toHaveBeenCalledTimes(1);
  });
+  it('uses a server seed without issuing the initial browser query', async () => {
+    const f = fixture();
+    render(<DomainProvider domain={f.domain} initialState={{ quantity: 7 }} revision={1}><Counter /></DomainProvider>);
+    expect(screen.getByTestId('quantity').textContent).toBe('7');
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 10)); });
+    expect(f.query).not.toHaveBeenCalled();
+  });
+
+  it('publishes only newer external revisions while preserving local UI state', async () => {
+    const f = fixture();
+    const view = render(<DomainProvider domain={f.domain} initialState={{ quantity: 2 }} revision={2}><Counter /></DomainProvider>);
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: 'preserve draft' } });
+    view.rerender(<DomainProvider domain={f.domain} initialState={{ quantity: 3 }} revision={3}><Counter /></DomainProvider>);
+    await waitFor(() => expect(screen.getByTestId('quantity').textContent).toBe('3'));
+    view.rerender(<DomainProvider domain={f.domain} initialState={{ quantity: 1 }} revision={1}><Counter /></DomainProvider>);
+    expect(screen.getByTestId('quantity').textContent).toBe('3');
+    expect((screen.getByRole('textbox') as HTMLInputElement).value).toBe('preserve draft');
+    expect(f.query).not.toHaveBeenCalled();
+  });
+
+  it('awaits the RSC bridge snapshot instead of a separate query refresh', async () => {
+    const f = fixture();
+    const result = vi.fn();
+    let finish!: (snapshot: { state: unknown; revision: number }) => void;
+    const refresh = vi.fn(() => new Promise<{ state: unknown; revision: number }>(resolve => { finish = resolve; }));
+    render(<DomainProvider domain={f.domain} initialState={{ quantity: 1 }} revision={1} onRefresh={refresh}><Counter onResult={result} /></DomainProvider>);
+    fireEvent.click(screen.getByRole('button'));
+    await waitFor(() => expect(refresh).toHaveBeenCalledOnce());
+    expect(screen.getByTestId('quantity-pending').textContent).toBe('true');
+    expect(result).not.toHaveBeenCalled();
+    await act(async () => { finish({ state: { quantity: 2 }, revision: 2 }); });
+    await waitFor(() => expect(result).toHaveBeenCalledWith(expect.objectContaining({ status: 'success' })));
+    expect(screen.getByTestId('quantity').textContent).toBe('2');
+    expect(screen.getByTestId('quantity-pending').textContent).toBe('false');
+    expect(f.query).not.toHaveBeenCalled();
+  });
+
+  it('reports committed refresh failure without discarding the server seed', async () => {
+    const f = fixture();
+    const result = vi.fn();
+    render(<DomainProvider domain={f.domain} initialState={{ quantity: 1 }} revision={1} onRefresh={async () => { throw new Error('RSC offline'); }}><Counter onResult={result} /></DomainProvider>);
+    fireEvent.click(screen.getByRole('button'));
+    await waitFor(() => expect(result).toHaveBeenCalledWith(expect.objectContaining({ status: 'refresh-error', committed: true })));
+    expect(screen.getByTestId('quantity').textContent).toBe('1');
+    expect(f.query).not.toHaveBeenCalled();
+  });
+
+  it('rejects a non-advancing refresh revision and uses the latest callback', async () => {
+    const f = fixture();
+    const result = vi.fn();
+    const first = vi.fn(async () => ({ state: { quantity: 2 }, revision: 2 }));
+    const latest = vi.fn(async () => ({ state: { quantity: 9 }, revision: 1 }));
+    const view = render(<DomainProvider domain={f.domain} initialState={{ quantity: 1 }} revision={1} onRefresh={first}><Counter onResult={result} /></DomainProvider>);
+    view.rerender(<DomainProvider domain={f.domain} initialState={{ quantity: 1 }} revision={1} onRefresh={latest}><Counter onResult={result} /></DomainProvider>);
+    fireEvent.click(screen.getByRole('button'));
+    await waitFor(() => expect(result).toHaveBeenCalledWith(expect.objectContaining({ status: 'refresh-error', committed: true })));
+    expect(first).not.toHaveBeenCalled(); expect(latest).toHaveBeenCalledOnce();
+    expect(screen.getByTestId('quantity').textContent).toBe('1');
+  });
+
+  it('hydrates the exact server snapshot without recovery or an initial query', async () => {
+    const f = fixture();
+    const makeTree = () => <DomainProvider domain={f.domain} initialState={{ quantity: 8 }} revision={4}><Counter /></DomainProvider>;
+    const container = document.createElement('div');
+    container.innerHTML = renderToString(makeTree());
+    document.body.append(container);
+    const recover = vi.fn();
+    let root!: ReturnType<typeof hydrateRoot>;
+    try {
+      await act(async () => { root = hydrateRoot(container, makeTree(), { onRecoverableError: recover }); });
+      expect(container.querySelector('output')?.textContent).toBe('8');
+      expect(recover).not.toHaveBeenCalled();
+      expect(f.query).not.toHaveBeenCalled();
+    } finally {
+      if (root) await act(async () => root.unmount());
+      container.remove();
+    }
+  });
+
 });
