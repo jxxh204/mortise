@@ -1,0 +1,13 @@
+{
+  "name": "@mortise/playground",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@mortise/core": "workspace:*",
+    "@mortise/react": "workspace:*",
+    "@mortise/vite-plugin": "workspace:*",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "@mortise/server": "workspace:*"
+  }
+}

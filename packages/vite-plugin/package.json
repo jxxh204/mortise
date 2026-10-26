@@ -1,0 +1,26 @@
+{
+  "name": "@mortise/vite-plugin",
+  "version": "0.2.0",
+  "type": "module",
+  "files": [
+    "dist"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "bin": {
+    "mortise": "./dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json"
+  },
+  "dependencies": {
+    "typescript": "^5.7.0"
+  },
+  "peerDependencies": {
+    "vite": "^6.0.0"
+  }
+}

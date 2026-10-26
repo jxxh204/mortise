@@ -1,0 +1,38 @@
+{
+  "name": "mortise-workspace",
+  "private": true,
+  "version": "0.2.0",
+  "type": "module",
+  "workspaces": [
+    "packages/*",
+    "examples/*"
+  ],
+  "scripts": {
+    "dev": "vite --config examples/playground/vite.config.ts",
+    "generate": "tsc -p packages/vite-plugin/tsconfig.build.json && node packages/vite-plugin/dist/cli.js examples/playground",
+    "build": "pnpm run build:packages && vite build --config examples/playground/vite.config.ts && vite build --config examples/playground/vite.config.ts --ssr src/start.ts --outDir dist-server",
+    "build:packages": "tsc -p packages/core/tsconfig.build.json && tsc -p packages/react/tsconfig.build.json && tsc -p packages/vite-plugin/tsconfig.build.json && tsc -p packages/server/tsconfig.build.json",
+    "test": "vitest run",
+    "typecheck": "pnpm generate && tsc --noEmit",
+    "start": "node examples/playground/dist-server/start.js"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "typescript": "^5.7.0",
+    "vite": "^6.0.0",
+    "vitest": "^3.0.0",
+    "jsdom": "^26.0.0",
+    "@testing-library/react": "^16.0.0"
+  },
+  "dependencies": {
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "@tanstack/react-query": "^5.66.0"
+  },
+  "packageManager": "pnpm@11.25.0",
+  "engines": {
+    "node": ">=20.19.0"
+  }
+}

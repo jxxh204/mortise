@@ -1,0 +1,44 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "jsx": "react-jsx",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "types": [
+      "node",
+      "vitest/globals"
+    ],
+    "lib": [
+      "ES2022",
+      "DOM",
+      "DOM.Iterable"
+    ],
+    "baseUrl": ".",
+    "paths": {
+      "@mortise/core": [
+        "packages/core/src/index.ts"
+      ],
+      "@mortise/react": [
+        "packages/react/src/index.tsx"
+      ],
+      "@mortise/vite-plugin": [
+        "packages/vite-plugin/src/index.ts"
+      ],
+      "@mortise/server": [
+        "packages/server/src/index.ts"
+      ],
+      "@mortise/server/node": [
+        "packages/server/src/node.ts"
+      ]
+    }
+  },
+  "include": [
+    "packages",
+    "examples",
+    "vitest.config.ts",
+    "examples/playground/.mortise/**/*.d.ts"
+  ]
+}
